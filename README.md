@@ -7,8 +7,7 @@ your taskbar, your Alt+Tab list or your screen.
 
 It was originally written in AutoIt (2008–2010) by **Niko Carpenter** and
 **Tyler Spivey** ([original project](https://github.com/n0ot/nutils)). Version 4
-is a complete rewrite in Rust on the native Win32 API; its source is at
-<https://github.com/jonathans859/nutils>.
+is a complete rewrite in Rust on the native Win32 API.
 
 ## Features
 
@@ -40,8 +39,8 @@ is a complete rewrite in Rust on the native Win32 API; its source is at
   reader (NVDA, JAWS, ZoomText or Narrator), or through Windows speech if no
   screen reader is running. You can also swap the beeps for your own WAV sound
   pack.
-- **Remembers hidden windows** if NUtils is restarted. They are forgotten after
-  a reboot.
+- **Remembers hidden windows** if NUtils is restarted, even if its state file
+  was deleted in the meantime. They are forgotten after a reboot.
 - **Updates.** NUtils checks for a new release when it starts. If there is one,
   the tray icon says so and the tray menu offers to install it; NUtils then
   restarts by itself. You can also choose **Check for updates** in the tray menu
@@ -79,6 +78,11 @@ works well with screen readers:
   **base modifier** (Shift+Alt at first) plus a key, so changing the base moves
   them all. Select a shortcut and press Enter to change its key, give it its own
   modifiers instead of the base, clear it, or reset it to the default.
+- **WinMurderer**: the watch-list. Each rule matches windows by part of their
+  title, their window class or their program, and either closes them or kills
+  their program. **Pick from open windows** fills in a rule from a window
+  that's open now. If a rule would catch more than one open window, or the
+  desktop or taskbar, NUtils lists them and asks before keeping it.
 
 When you press **Save**, NUtils picks up the new settings straight away. There is
 no need to restart it.
@@ -121,7 +125,7 @@ later version**. It comes with no warranty. The full license text is in
 - Original NUtils (AutoIt, versions 1–3): Copyright © 2008–2010 Arbalon, Niko
   Carpenter and Tyler Spivey. <https://github.com/n0ot/nutils>
 - Version 4 is a modified version of it, rewritten in Rust in 2026 by
-  Jonathan Schuster. Source: <https://github.com/jonathans859/nutils>
+  Jonathan Schuster.
 
 NUtils is built with other open-source libraries, each under its own license
 (MIT, Apache 2.0, MPL 2.0, the wxWindows Library Licence and others). Their
