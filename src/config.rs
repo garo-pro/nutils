@@ -198,6 +198,25 @@ pub struct Rule {
     pub degree: Degree,
 }
 
+impl Rule {
+    /// Whether a window matches, given a way to read its title, class or
+    /// program. Case-insensitive; an empty value never matches.
+    pub fn matches(&self, field: impl FnOnce(MatchKind) -> Option<String>) -> bool {
+        let needle = self.value.to_ascii_lowercase();
+        if needle.is_empty() {
+            return false;
+        }
+        let Some(have) = field(self.match_kind) else {
+            return false;
+        };
+        let have = have.to_ascii_lowercase();
+        match self.match_kind {
+            MatchKind::Title => have.contains(&needle),
+            MatchKind::Class | MatchKind::Exe => have == needle,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
@@ -292,5 +311,21 @@ mod tests {
             toml::to_string(&b).unwrap(),
             "config.toml's [hotkeys] should show the built-in defaults"
         );
+    }
+
+    #[test]
+    fn rules_match_like_winmurderer() {
+        let rule = |match_kind, value: &str| Rule { match_kind, value: value.into(), degree: Degree::Close };
+        let window = |kind| match kind {
+            MatchKind::Title => Some("Untitled - Notepad".to_string()),
+            MatchKind::Class => Some("Notepad".to_string()),
+            MatchKind::Exe => Some("notepad.exe".to_string()),
+        };
+        assert!(rule(MatchKind::Title, "untitled").matches(window));
+        assert!(rule(MatchKind::Class, "NOTEPAD").matches(window));
+        assert!(!rule(MatchKind::Class, "Note").matches(window), "a class must match in full");
+        assert!(rule(MatchKind::Exe, "Notepad.exe").matches(window));
+        assert!(!rule(MatchKind::Title, "").matches(window), "an empty value matches nothing");
+        assert!(!rule(MatchKind::Exe, "notepad.exe").matches(|_| None), "an unknown program");
     }
 }

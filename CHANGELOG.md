@@ -3,6 +3,16 @@
 Each release's section here becomes its release notes on GitHub, which the
 update dialog shows. Start a new release with a `## <version>` heading.
 
+## 4.1.0
+
+- WinMurderer rules can now be managed in Settings, on a new WinMurderer tab,
+  instead of only by editing `config.toml`. Add, edit and remove rules there;
+  each one matches windows by part of their title, their window class or their
+  program, and closes them or kills their program. **Pick from open windows**
+  fills in a rule from a window that's open now, and if a rule would catch more
+  than one open window, or the desktop or taskbar, Settings lists them and asks
+  before keeping it.
+
 ## 4.0.1
 
 - With the visual check on, Electron apps such as Joplin can now be made

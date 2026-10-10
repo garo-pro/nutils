@@ -1,21 +1,25 @@
 //! NUtils settings — an accessible shortcuts editor built with wxWidgets (via
 //! wxDragon), closely following Fedra's accessible dialog design: a General tab,
-//! and a Keybindings tab that lists shortcuts in a `ListBox` and edits one at a
-//! time in a "Set Shortcut" sub-dialog (modifier checkboxes + a key-capture field
-//! + a screen-reader live region announcing the detected key).
+//! a Keybindings tab that lists shortcuts in a `ListBox` and edits one at a time
+//! in a "Set Shortcut" sub-dialog (modifier checkboxes, a key-capture field and a
+//! screen-reader live region announcing the detected key), and a WinMurderer tab
+//! that lists the rules and edits one at a time in an "Add Rule" or "Edit Rule"
+//! dialog.
 //!
 //! It edits the same `config.toml` the core reads (structs shared from
 //! `../../src/config.rs`); the running core notices the file change and reloads.
 
 #![windows_subsystem = "windows"]
 
+mod open_windows;
 mod update;
 
 #[path = "../../src/config.rs"]
 #[allow(dead_code)]
 mod config;
 
-use config::{has_modifiers, Config, FeedbackMode, Hotkeys};
+use config::{has_modifiers, Config, Degree, FeedbackMode, Hotkeys, MatchKind, Rule};
+use open_windows::OpenWindow;
 use std::cell::RefCell;
 use std::rc::Rc;
 use wxdragon::prelude::*;
@@ -701,6 +705,288 @@ fn prompt_for_shortcut(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// WinMurderer rules
+// ---------------------------------------------------------------------------
+
+/// The "Match windows by" choices, in order, each with its hint.
+const MATCH_KINDS: [(MatchKind, &str, &str); 3] = [
+    (MatchKind::Title, "Title contains", "Part of the window's title. Case doesn't matter."),
+    (MatchKind::Class, "Window class", "The window's class name, in full."),
+    (MatchKind::Exe, "Program", "The program's file name, such as notepad.exe."),
+];
+
+/// The "Action" choices, in order.
+const DEGREES: [(Degree, &str); 2] = [
+    (Degree::Close, "Close the window"),
+    (Degree::Kill, "Kill its program"),
+];
+
+fn kind_at(sel: Option<u32>) -> MatchKind {
+    MATCH_KINDS[sel.unwrap_or(0) as usize % MATCH_KINDS.len()].0
+}
+
+fn kind_index(kind: MatchKind) -> u32 {
+    MATCH_KINDS.iter().position(|m| m.0 == kind).unwrap_or(0) as u32
+}
+
+/// A rule as the Rules list reads it, e.g. "Close: title contains Nag".
+fn describe_rule(rule: &Rule) -> String {
+    let action = match rule.degree {
+        Degree::Close => "Close",
+        Degree::Kill => "Kill program",
+    };
+    let by = match rule.match_kind {
+        MatchKind::Title => "title contains",
+        MatchKind::Class => "window class is",
+        MatchKind::Exe => "program is",
+    };
+    format!("{action}: {by} {}", rule.value)
+}
+
+fn alert(parent: &dyn WxWidget, message: &str, caption: &str) {
+    MessageDialog::builder(parent, message, caption)
+        .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconWarning)
+        .build()
+        .show_modal();
+}
+
+/// A rule takes effect on every matching window as soon as NUtils reloads. If it
+/// would hit several windows open now, or the desktop, the taskbar or this
+/// editor, list them and ask before keeping it.
+fn confirm_reach(parent: &Dialog, rule: &Rule) -> bool {
+    let hits: Vec<OpenWindow> = open_windows::all()
+        .into_iter()
+        .filter(|w| rule.matches(|kind| w.field(kind)))
+        .collect();
+    if hits.len() < 2 && !hits.iter().any(|w| w.own || w.shell) {
+        return true;
+    }
+    let mut names: Vec<String> = Vec::new();
+    for w in &hits {
+        let name = if w.shell {
+            "The desktop or taskbar".to_string()
+        } else if w.own {
+            "These settings".to_string()
+        } else if w.title.trim().is_empty() {
+            format!("A window without a title ({})", w.exe.as_deref().unwrap_or("unknown program"))
+        } else {
+            w.label()
+        };
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    const SHOWN: usize = 10;
+    let mut list = names.iter().take(SHOWN).cloned().collect::<Vec<_>>().join("\n");
+    if names.len() > SHOWN {
+        list.push_str(&format!("\nand {} more", names.len() - SHOWN));
+    }
+    let (count, what) = match (hits.len(), rule.degree) {
+        (1, Degree::Close) => ("1 window".to_string(), "close it"),
+        (1, Degree::Kill) => ("1 window".to_string(), "end its program"),
+        (n, Degree::Close) => (format!("{n} windows"), "close them"),
+        (n, Degree::Kill) => (format!("{n} windows"), "end their programs"),
+    };
+    let message = format!(
+        "This rule matches {count} open now:\n\n{list}\n\nWhen you save, NUtils will {what}. Keep this rule?"
+    );
+    let ask = MessageDialog::builder(parent, &message, "Check Rule")
+        .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconWarning)
+        .build();
+    ask.show_modal() == ID_YES
+}
+
+/// Choose one of the windows open now. Returns `None` when cancelled.
+fn pick_window(parent: &Dialog) -> Option<OpenWindow> {
+    let mut windows = open_windows::pickable();
+    if windows.is_empty() {
+        alert(parent, "No other windows are open.", "Pick a Window");
+        return None;
+    }
+    let dialog = Dialog::builder(parent, "Pick a Window").with_size(520, 400).build();
+    let panel = Panel::builder(&dialog).build();
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+    let label = StaticText::builder(&panel).with_label("&Open windows:").build();
+    sizer.add(&label, 0, SizerFlag::Left | SizerFlag::Right | SizerFlag::Top, 8);
+    let list = ListBox::builder(&panel).build();
+    for w in &windows {
+        list.append(&w.label());
+    }
+    list.set_selection(0, true);
+    sizer.add(&list, 1, SizerFlag::Expand | SizerFlag::All, 8);
+    list.on_item_double_clicked(move |_| dialog.end_modal(ID_OK));
+
+    let buttons = BoxSizer::builder(Orientation::Horizontal).build();
+    let ok = Button::builder(&panel).with_id(ID_OK).with_label("OK").build();
+    ok.set_default();
+    let cancel = Button::builder(&panel).with_id(ID_CANCEL).with_label("Cancel").build();
+    buttons.add_stretch_spacer(1);
+    buttons.add(&ok, 0, SizerFlag::Right, 8);
+    buttons.add(&cancel, 0, SizerFlag::Right, 8);
+    sizer.add_sizer(&buttons, 0, SizerFlag::Expand | SizerFlag::All, 8);
+
+    panel.set_sizer(sizer, true);
+    let dialog_sizer = BoxSizer::builder(Orientation::Vertical).build();
+    dialog_sizer.add(&panel, 1, SizerFlag::Expand, 0);
+    dialog.set_sizer(dialog_sizer, true);
+    dialog.set_affirmative_id(ID_OK);
+    dialog.set_escape_id(ID_CANCEL);
+    dialog.centre();
+    list.set_focus();
+
+    let picked = match dialog.show_modal() {
+        ID_OK => list
+            .get_selection()
+            .filter(|&i| (i as usize) < windows.len())
+            .map(|i| windows.swap_remove(i as usize)),
+        _ => None,
+    };
+    dialog.destroy();
+    picked
+}
+
+/// Lay out a label and its control on one row. Each label is created just
+/// before its control, which names the control for screen readers.
+fn add_labelled<W: WxWidget>(sizer: &BoxSizer, label: &StaticText, control: &W) {
+    let row = BoxSizer::builder(Orientation::Horizontal).build();
+    row.add(label, 0, SizerFlag::AlignCenterVertical | SizerFlag::Right, 8);
+    row.add(control, 1, SizerFlag::Expand, 0);
+    sizer.add_sizer(&row, 0, SizerFlag::Expand | SizerFlag::All, 8);
+}
+
+/// Add a rule, or edit `current`. Returns `None` when cancelled.
+fn prompt_for_rule(parent: &Frame, current: Option<&Rule>) -> Option<Rule> {
+    let title = if current.is_some() { "Edit Rule" } else { "Add Rule" };
+    let start = current.cloned().unwrap_or(Rule {
+        match_kind: MatchKind::Title,
+        value: String::new(),
+        degree: Degree::Close,
+    });
+    let dialog = Dialog::builder(parent, title).with_size(460, 330).build();
+    let panel = Panel::builder(&dialog).build();
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+
+    let match_label = StaticText::builder(&panel).with_label("&Match windows by:").build();
+    let match_choice = Choice::builder(&panel).build();
+    for (_, label, _) in MATCH_KINDS {
+        match_choice.append(label);
+    }
+    match_choice.set_selection(kind_index(start.match_kind));
+    add_labelled(&sizer, &match_label, &match_choice);
+
+    let value_label = StaticText::builder(&panel).with_label("&Text to match:").build();
+    let value = TextCtrl::builder(&panel).build();
+    value.set_value(&start.value);
+    add_labelled(&sizer, &value_label, &value);
+
+    let hint = StaticText::builder(&panel)
+        .with_label(MATCH_KINDS[kind_index(start.match_kind) as usize].2)
+        .build();
+    sizer.add(&hint, 0, SizerFlag::Expand | SizerFlag::Left | SizerFlag::Right, 8);
+
+    let pick = Button::builder(&panel).with_label("&Pick from open windows...").build();
+    sizer.add(&pick, 0, SizerFlag::All, 8);
+
+    let action_label = StaticText::builder(&panel).with_label("&Action:").build();
+    let action = Choice::builder(&panel).build();
+    for (_, label) in DEGREES {
+        action.append(label);
+    }
+    action.set_selection(DEGREES.iter().position(|d| d.0 == start.degree).unwrap_or(0) as u32);
+    add_labelled(&sizer, &action_label, &action);
+
+    // The window last picked. While the text is still what was picked, changing
+    // "Match windows by" swaps in that window's title, class or program instead.
+    let picked: Rc<RefCell<Option<OpenWindow>>> = Rc::new(RefCell::new(None));
+    let shown_kind = Rc::new(std::cell::Cell::new(start.match_kind));
+    {
+        let picked = picked.clone();
+        let shown_kind = shown_kind.clone();
+        match_choice.on_selection_changed(move |_| {
+            let kind = kind_at(match_choice.get_selection());
+            hint.set_label(MATCH_KINDS[kind_index(kind) as usize].2);
+            if let Some(w) = picked.borrow().as_ref() {
+                if w.field(shown_kind.get()).as_deref() == Some(value.get_value().as_str()) {
+                    value.set_value(&w.field(kind).unwrap_or_default());
+                }
+            }
+            shown_kind.set(kind);
+            panel.layout();
+        });
+    }
+    {
+        let picked = picked.clone();
+        pick.on_click(move |_| {
+            if let Some(w) = pick_window(&dialog) {
+                let kind = kind_at(match_choice.get_selection());
+                value.set_value(&w.field(kind).unwrap_or_default());
+                shown_kind.set(kind);
+                *picked.borrow_mut() = Some(w);
+                value.set_focus();
+            }
+        });
+    }
+
+    let buttons = BoxSizer::builder(Orientation::Horizontal).build();
+    let ok = Button::builder(&panel).with_id(ID_OK).with_label("OK").build();
+    ok.set_default();
+    let cancel = Button::builder(&panel).with_id(ID_CANCEL).with_label("Cancel").build();
+    buttons.add_stretch_spacer(1);
+    buttons.add(&ok, 0, SizerFlag::Right, 8);
+    buttons.add(&cancel, 0, SizerFlag::Right, 8);
+    sizer.add_sizer(&buttons, 0, SizerFlag::Expand | SizerFlag::All, 8);
+
+    // OK closes the dialog only once the rule is valid (and, if it reaches far,
+    // confirmed); otherwise it stays open with focus on the text.
+    let result: Rc<RefCell<Option<Rule>>> = Rc::new(RefCell::new(None));
+    {
+        let result = result.clone();
+        ok.on_click(move |event| {
+            event.event.skip(false);
+            let match_kind = kind_at(match_choice.get_selection());
+            let mut text = value.get_value().trim().to_string();
+            if text.is_empty() {
+                alert(&dialog, "Type the text to match, or pick a window.", title);
+                value.set_focus();
+                return;
+            }
+            if match_kind == MatchKind::Exe && !text.contains('.') {
+                text.push_str(".exe");
+            }
+            let rule = Rule {
+                match_kind,
+                value: text,
+                degree: DEGREES[action.get_selection().unwrap_or(0) as usize % DEGREES.len()].0,
+            };
+            if !confirm_reach(&dialog, &rule) {
+                value.set_focus();
+                return;
+            }
+            *result.borrow_mut() = Some(rule);
+            dialog.end_modal(ID_OK);
+        });
+    }
+
+    panel.set_sizer(sizer, true);
+    let dialog_sizer = BoxSizer::builder(Orientation::Vertical).build();
+    dialog_sizer.add(&panel, 1, SizerFlag::Expand, 0);
+    dialog.set_sizer(dialog_sizer, true);
+    dialog.set_affirmative_id(ID_OK);
+    dialog.set_escape_id(ID_CANCEL);
+    dialog.centre();
+    match_choice.set_focus();
+
+    let code = dialog.show_modal();
+    dialog.destroy();
+    if code == ID_OK {
+        result.take()
+    } else {
+        None
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Main window
 // ---------------------------------------------------------------------------
@@ -874,6 +1160,141 @@ fn main() {
             }
         });
 
+        // ---- WinMurderer tab --------------------------------------------
+        let murderer = Panel::builder(&notebook)
+            .with_style(PanelStyle::TabTraversal)
+            .build();
+        let msizer = BoxSizer::builder(Orientation::Vertical).build();
+        let intro = StaticText::builder(&murderer)
+            .with_label(
+                "WinMurderer closes a window, or kills its program, as soon as it appears, \
+                 such as a nagging popup. New rules take effect when you save.",
+            )
+            .build();
+        intro.wrap(500);
+        msizer.add(&intro, 0, SizerFlag::Expand | SizerFlag::All, 8);
+        let rules_label = StaticText::builder(&murderer).with_label("&Rules:").build();
+        msizer.add(&rules_label, 0, SizerFlag::Left | SizerFlag::Right | SizerFlag::Top, 8);
+        let rules_list = ListBox::builder(&murderer).build();
+        msizer.add(&rules_list, 1, SizerFlag::Expand | SizerFlag::All, 8);
+
+        let rbtns = BoxSizer::builder(Orientation::Horizontal).build();
+        let add_btn = Button::builder(&murderer).with_label("&Add Rule...").build();
+        let edit_btn = Button::builder(&murderer).with_label("&Edit Rule...").build();
+        let remove_btn = Button::builder(&murderer).with_label("Re&move Rule").build();
+        rbtns.add(&add_btn, 0, SizerFlag::Right, 8);
+        rbtns.add(&edit_btn, 0, SizerFlag::Right, 8);
+        rbtns.add(&remove_btn, 0, SizerFlag::Right, 8);
+        msizer.add_sizer(&rbtns, 0, SizerFlag::Expand | SizerFlag::All, 8);
+
+        murderer.set_sizer(msizer, true);
+        notebook.add_page(&murderer, "WinMurderer", false, None);
+
+        // Rebuild the list and select row `sel` (clamped). Edit and Remove are
+        // disabled while there are no rules.
+        let refresh_rules = {
+            let cfg = cfg.clone();
+            move |sel: u32| {
+                rules_list.clear();
+                for rule in &cfg.borrow().rules {
+                    rules_list.append(&describe_rule(rule));
+                }
+                let count = rules_list.get_count();
+                if count > 0 {
+                    rules_list.set_selection(sel.min(count - 1), true);
+                }
+                edit_btn.enable(count > 0);
+                remove_btn.enable(count > 0);
+            }
+        };
+        refresh_rules(0);
+
+        // After a change, focus the list so the screen reader reads the rule.
+        let add_rule = {
+            let cfg = cfg.clone();
+            let refresh_rules = refresh_rules.clone();
+            move || {
+                let Some(rule) = prompt_for_rule(&frame, None) else {
+                    return;
+                };
+                cfg.borrow_mut().rules.push(rule);
+                refresh_rules(u32::MAX);
+                rules_list.set_focus();
+            }
+        };
+        let edit_rule = {
+            let cfg = cfg.clone();
+            let refresh_rules = refresh_rules.clone();
+            move || {
+                let Some(sel) = rules_list.get_selection() else {
+                    return;
+                };
+                let Some(current) = cfg.borrow().rules.get(sel as usize).cloned() else {
+                    return;
+                };
+                let Some(rule) = prompt_for_rule(&frame, Some(&current)) else {
+                    return;
+                };
+                cfg.borrow_mut().rules[sel as usize] = rule;
+                refresh_rules(sel);
+                rules_list.set_focus();
+            }
+        };
+        let remove_rule = {
+            let cfg = cfg.clone();
+            let refresh_rules = refresh_rules.clone();
+            move || {
+                let Some(sel) = rules_list.get_selection() else {
+                    return;
+                };
+                {
+                    let mut cfg = cfg.borrow_mut();
+                    if (sel as usize) >= cfg.rules.len() {
+                        return;
+                    }
+                    cfg.rules.remove(sel as usize);
+                }
+                refresh_rules(sel);
+                // Remove is disabled once the last rule is gone.
+                if rules_list.get_count() > 0 {
+                    rules_list.set_focus();
+                } else {
+                    add_btn.set_focus();
+                }
+            }
+        };
+        {
+            let add_rule = add_rule.clone();
+            add_btn.on_click(move |_| add_rule());
+            let edit_click = edit_rule.clone();
+            edit_btn.on_click(move |_| edit_click());
+            let edit_dclick = edit_rule.clone();
+            rules_list.on_item_double_clicked(move |_| edit_dclick());
+            let remove_click = remove_rule.clone();
+            remove_btn.on_click(move |_| remove_click());
+        }
+        // Enter edits and Delete removes the selected rule. Enter has to be
+        // caught here: on its way to the list it would press the frame's
+        // default button, Save.
+        frame.bind_internal(EventType::CHAR_HOOK, move |e: Event| {
+            if rules_list.has_focus() && rules_list.get_count() > 0 {
+                match e.get_key_code() {
+                    Some(13 | 370) => {
+                        e.skip(false);
+                        edit_rule();
+                        return;
+                    }
+                    Some(127 | 386) => {
+                        e.skip(false);
+                        remove_rule();
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+            e.skip(true);
+        });
+
         // ---- Save / Cancel + frame layout -------------------------------
         let main_sizer = BoxSizer::builder(Orientation::Vertical).build();
         main_sizer.add(&notebook, 1, SizerFlag::Expand | SizerFlag::All, 8);
@@ -992,6 +1413,17 @@ mod tests {
                 set_binding(&mut h, *act, b.clone());
                 assert_eq!(get_binding(&h, *act), b);
             }
+        }
+    }
+
+    #[test]
+    fn rules_read_action_first() {
+        let rule = |match_kind, degree| Rule { match_kind, value: "Nag".into(), degree };
+        assert_eq!(describe_rule(&rule(MatchKind::Title, Degree::Close)), "Close: title contains Nag");
+        assert_eq!(describe_rule(&rule(MatchKind::Class, Degree::Kill)), "Kill program: window class is Nag");
+        assert_eq!(describe_rule(&rule(MatchKind::Exe, Degree::Close)), "Close: program is Nag");
+        for (kind, _, _) in MATCH_KINDS {
+            assert_eq!(kind_at(Some(kind_index(kind))), kind);
         }
     }
 

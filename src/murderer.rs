@@ -5,15 +5,11 @@ use crate::config::{Degree, MatchKind, Rule};
 use crate::window;
 
 fn matches(rule: &Rule, hwnd: windows::Win32::Foundation::HWND) -> bool {
-    let needle = rule.value.to_ascii_lowercase();
-    if needle.is_empty() {
-        return false;
-    }
-    match rule.match_kind {
-        MatchKind::Title => window::get_title(hwnd).to_ascii_lowercase().contains(&needle),
-        MatchKind::Class => window::class_name(hwnd).to_ascii_lowercase() == needle,
-        MatchKind::Exe => window::owner_exe(hwnd).map(|e| e == needle).unwrap_or(false),
-    }
+    rule.matches(|kind| match kind {
+        MatchKind::Title => Some(window::get_title(hwnd)),
+        MatchKind::Class => Some(window::class_name(hwnd)),
+        MatchKind::Exe => window::owner_exe(hwnd),
+    })
 }
 
 /// Evaluate every rule against every top-level window and act on matches.

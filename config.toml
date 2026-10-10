@@ -37,6 +37,7 @@ check_for_updates = true # false: don't check GitHub for a new release at startu
                          # (Check for updates in the tray menu still works).
 
 # --- WinMurderer: auto-close/kill windows on sight ---
+# (Easier from the WinMurderer tab in Settings.)
 # [[rules]]
 # match = "title"   # "title" (substring) | "class" | "exe"
 # value = "Annoying Popup"

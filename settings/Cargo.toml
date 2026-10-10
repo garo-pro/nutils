@@ -26,5 +26,6 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Threading",
+    "Win32_Graphics_Dwm",         # open_windows: skip cloaked windows
     "Win32_System_LibraryLoader", # tests: hold a DLL loaded
 ] }
