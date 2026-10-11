@@ -6,6 +6,10 @@
 //! window as [`WM_UPDATE_FOUND`], which puts it in the tray. Updating itself —
 //! release notes, download, signature check, install — is the settings program's
 //! `--update` mode, which also closes and restarts this program.
+//!
+//! The dev update channel compares commits, and the settings program asks this
+//! one for its commit (`nutils.exe --commit`): this program is rebuilt for every
+//! release, while CI reuses the settings program while its sources don't change.
 
 use crate::config::exe_dir;
 use std::os::windows::process::CommandExt;
@@ -68,6 +72,14 @@ pub fn take_found() -> Option<String> {
 /// false if the settings program couldn't be started.
 pub fn launch() -> bool {
     Command::new(settings_exe()).arg("--update").spawn().is_ok()
+}
+
+/// `--commit`: print the commit this was built from to the caller's stdout.
+/// This is a GUI program, so there's no console; a caller that pipes stdout
+/// still gets the line.
+pub fn print_commit() {
+    use std::io::Write;
+    let _ = writeln!(std::io::stdout(), "{}", env!("NUTILS_COMMIT"));
 }
 
 /// Delete the files an update moved aside (`*.old`). One still loaded somewhere

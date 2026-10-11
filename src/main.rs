@@ -81,6 +81,13 @@ thread_local! {
 }
 
 fn main() {
+    // `--commit`: print the commit this was built from, for the settings
+    // program's dev-channel update check (see update.rs).
+    if std::env::args().nth(1).as_deref() == Some("--commit") {
+        update::print_commit();
+        return;
+    }
+
     // Single instance: bail if another NUtils window already exists.
     unsafe {
         if FindWindowW(None, WINDOW_TITLE).is_ok() {

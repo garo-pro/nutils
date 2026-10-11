@@ -149,6 +149,17 @@ impl FeedbackMode {
     }
 }
 
+/// Which releases update checks look for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    /// Tagged releases (v4.0.0, ...).
+    #[default]
+    Stable,
+    /// The development build of the latest change on master.
+    Dev,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     /// `true` = beep N times when switching to stack N; `false` = use number pack.
@@ -170,6 +181,9 @@ pub struct Settings {
     /// in the tray. Checking by hand works either way.
     #[serde(default = "default_true")]
     pub check_for_updates: bool,
+    /// Stable releases, or development builds of every change.
+    #[serde(default)]
+    pub update_channel: UpdateChannel,
 }
 
 fn default_true() -> bool {
@@ -184,6 +198,7 @@ impl Default for Settings {
             detailed_status: false,
             visual_check: false,
             check_for_updates: true,
+            update_channel: UpdateChannel::Stable,
         }
     }
 }
