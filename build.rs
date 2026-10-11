@@ -6,6 +6,25 @@ fn main() {
             .expect("embed manifest");
     }
     delay_load_prism_vendor_dlls();
+    embed_commit();
+}
+
+/// Embed the commit this is built from as `NUTILS_COMMIT` (seven hex digits, or
+/// empty outside a git checkout), for the dev update channel, which compares
+/// commits. CI passes `GITHUB_SHA`; locally it comes from git.
+fn embed_commit() {
+    println!("cargo:rerun-if-env-changed=GITHUB_SHA");
+    for f in [".git/HEAD", ".git/logs/HEAD"] {
+        if std::path::Path::new(f).exists() {
+            println!("cargo:rerun-if-changed={f}");
+        }
+    }
+    let sha = std::env::var("GITHUB_SHA").ok().or_else(|| {
+        let out = std::process::Command::new("git").args(["rev-parse", "HEAD"]).output().ok()?;
+        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    });
+    let short: String = sha.unwrap_or_default().chars().take(7).collect();
+    println!("cargo:rustc-env=NUTILS_COMMIT={short}");
 }
 
 /// Delay-load the screen-reader DLLs Prism imports (`speech` feature, MSVC).

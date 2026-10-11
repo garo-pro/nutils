@@ -9,6 +9,11 @@
 //! - `nutils-settings.exe --update` runs the whole flow (release notes, download,
 //!   install), as does the "Check for updates now" button in Settings.
 //!
+//! Two channels, as set in `config.toml`: stable compares the version with the
+//! latest release's tag; dev compares the commit NUtils was built from with the
+//! rolling `latest` pre-release, which CI rebuilds on every push to master and
+//! whose notes list its recent commits (`- <hash> <subject>`, newest first).
+//!
 //! ship-shape checks GitHub, picks `nutils.zip`, downloads it and verifies its
 //! minisign signature, and shows the update dialog. The install step is our own:
 //! ship-shape's would wait only for *this* process and restart it, but NUtils is
@@ -16,6 +21,7 @@
 //! auto-transparent apps) must be stopped or moved aside before the zip can
 //! replace them, and `nutils.exe` is the one to restart.
 
+use crate::config::{exe_dir, Config, UpdateChannel as Channel};
 use ship_shape::{UpdateChannel, UpdateCheckOutcome, UpdateError, UpdaterConfig};
 use std::cell::RefCell;
 use std::path::Path;
@@ -49,15 +55,49 @@ fn current_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-fn check() -> Result<UpdateCheckOutcome, UpdateError> {
-    // Stable channel: compares release tags, so no commit hash is needed.
-    ship_shape::check_for_updates(&config(), &current_version(), "", false, UpdateChannel::Stable)
+/// The commit the installed NUtils was built from, asked of `nutils.exe`
+/// rather than built into this program: CI rebuilds `nutils.exe` every time but
+/// reuses this program while its sources don't change. Debug builds can pretend
+/// to be an older commit: `NUTILS_PRETEND_COMMIT=abc1234`.
+fn current_commit() -> Result<String, UpdateError> {
+    #[cfg(debug_assertions)]
+    if let Ok(c) = std::env::var("NUTILS_PRETEND_COMMIT") {
+        return Ok(c);
+    }
+    use std::os::windows::process::CommandExt;
+    let failed = || UpdateError::InvalidVersion("Could not tell which build of NUtils this is.".to_string());
+    let out = std::process::Command::new(exe_dir().join("nutils.exe"))
+        .arg("--commit")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .output()
+        .map_err(|_| failed())?;
+    let commit = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if commit.len() == 7 && commit.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(commit)
+    } else {
+        Err(failed())
+    }
+}
+
+fn check(channel: Channel) -> Result<UpdateCheckOutcome, UpdateError> {
+    match channel {
+        // Compares release tags, so no commit is needed.
+        Channel::Stable => ship_shape::check_for_updates(&config(), &current_version(), "", false, UpdateChannel::Stable),
+        Channel::Dev => ship_shape::check_for_updates(&config(), "", &current_commit()?, false, UpdateChannel::Dev),
+    }
+}
+
+/// The channel saved in `config.toml`.
+fn saved_channel() -> Channel {
+    Config::load_or_init().settings.update_channel
 }
 
 /// `--check`: print one line for the core to read — `update <version>`,
 /// `current <version>` or `error <message>` — and return the exit code.
 pub fn check_headless() -> i32 {
-    match check() {
+    match check(saved_channel()) {
         Ok(UpdateCheckOutcome::UpdateAvailable(r)) => {
             println!("update {}", r.latest_version);
             0
@@ -91,17 +131,18 @@ thread_local! {
 /// Guards against two flows at once (e.g. the button pressed twice).
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
-/// Run the whole update flow with dialogs parented to `parent`: check, show the
-/// release notes, download and verify, install. Every outcome is reported, so
-/// "no update" and errors are said too. With `exit_when_done` (the standalone
-/// `--update` mode) the process ends when the flow does.
-pub fn run(parent: &dyn WxWidget, exit_when_done: bool) {
+/// Run the whole update flow on `channel` (`None`: the saved one) with dialogs
+/// parented to `parent`: check, show the release notes, download and verify,
+/// install. Every outcome is reported, so "no update" and errors are said too.
+/// With `exit_when_done` (the standalone `--update` mode) the process ends when
+/// the flow does.
+pub fn run(parent: &dyn WxWidget, channel: Option<Channel>, exit_when_done: bool) {
     if RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
     let parent = Parent(parent.handle_ptr() as usize);
     std::thread::spawn(move || {
-        let outcome = check();
+        let outcome = check(channel.unwrap_or_else(saved_channel));
         wxdragon::call_after(Box::new(move || present(parent, outcome, exit_when_done)));
         wxdragon::wake_up_idle();
     });
@@ -125,10 +166,13 @@ fn present(parent: Parent, outcome: Result<UpdateCheckOutcome, UpdateError>, exi
     let result = match outcome {
         Ok(UpdateCheckOutcome::UpdateAvailable(result)) => result,
         Ok(UpdateCheckOutcome::UpToDate(latest)) => {
-            let text = format!(
-                "NUtils is up to date. You have version {}; the latest release is {latest}.",
-                env!("CARGO_PKG_VERSION")
-            );
+            let text = match latest.strip_prefix("dev-") {
+                Some(commit) => format!("NUtils is up to date with the latest development build ({commit})."),
+                None => format!(
+                    "NUtils is up to date. You have version {}; the latest release is {latest}.",
+                    env!("CARGO_PKG_VERSION")
+                ),
+            };
             message(parent, &text, "NUtils Update", MessageDialogStyle::IconInformation);
             return finish(exit_when_done);
         }

@@ -12,6 +12,10 @@ update dialog shows. Start a new release with a `## <version>` heading.
   fills in a rule from a window that's open now, and if a rule would catch more
   than one open window, or the desktop or taskbar, Settings lists them and asks
   before keeping it.
+- A development update channel: choose **Development builds** under Update
+  channel in Settings to get a build of every change as soon as it's made,
+  instead of waiting for a release. Switch back to **Stable releases** at any
+  time; you'll get the next release as usual.
 
 ## 4.0.1
 

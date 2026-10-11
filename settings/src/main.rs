@@ -18,7 +18,7 @@ mod update;
 #[allow(dead_code)]
 mod config;
 
-use config::{has_modifiers, Config, Degree, FeedbackMode, Hotkeys, MatchKind, Rule};
+use config::{has_modifiers, Config, Degree, FeedbackMode, Hotkeys, MatchKind, Rule, UpdateChannel};
 use open_windows::OpenWindow;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -991,6 +991,13 @@ fn prompt_for_rule(parent: &Frame, current: Option<&Rule>) -> Option<Rule> {
 // Main window
 // ---------------------------------------------------------------------------
 
+fn selected_channel(choice: &Choice) -> UpdateChannel {
+    match choice.get_selection() {
+        Some(1) => UpdateChannel::Dev,
+        _ => UpdateChannel::Stable,
+    }
+}
+
 fn main() {
     // Modes the NUtils core starts this program in (see update.rs): a check with
     // no window, or just the update flow.
@@ -1007,7 +1014,7 @@ fn main() {
             // A never-shown frame as the dialogs' parent; the process exits when
             // the flow is done.
             let frame = Frame::builder().with_title("NUtils Update").build();
-            update::run(&frame, true);
+            update::run(&frame, None, true);
             return;
         }
         let cfg = Rc::new(RefCell::new(Config::load_or_init()));
@@ -1064,8 +1071,24 @@ fn main() {
             .build();
         updates_cb.set_value(cfg.borrow().settings.check_for_updates);
         gsizer.add(&updates_cb, 0, SizerFlag::All, 8);
+
+        // Update channel: tagged releases, or a build of every change.
+        let channel_label = StaticText::builder(&general).with_label("Update c&hannel:").build();
+        let channel_choice = Choice::builder(&general).build();
+        channel_choice.append("Stable releases");
+        channel_choice.append("Development builds (every change, less tested)");
+        channel_choice.set_selection(match cfg.borrow().settings.update_channel {
+            UpdateChannel::Stable => 0,
+            UpdateChannel::Dev => 1,
+        });
+        let channel_sizer = BoxSizer::builder(Orientation::Horizontal).build();
+        channel_sizer.add(&channel_label, 0, SizerFlag::AlignCenterVertical | SizerFlag::Right, 8);
+        channel_sizer.add(&channel_choice, 1, SizerFlag::Expand, 0);
+        gsizer.add_sizer(&channel_sizer, 0, SizerFlag::Expand | SizerFlag::All, 8);
+
+        // Checks the channel chosen here, saved or not.
         let check_now = Button::builder(&general).with_label("Check for updates &now").build();
-        check_now.on_click(move |_| update::run(&frame, false));
+        check_now.on_click(move |_| update::run(&frame, Some(selected_channel(&channel_choice)), false));
         gsizer.add(&check_now, 0, SizerFlag::All, 8);
 
         general.set_sizer(gsizer, true);
@@ -1319,6 +1342,7 @@ fn main() {
         let dsc = detail_cb;
         let vsc = visual_cb;
         let usc = updates_cb;
+        let chc = channel_choice;
         let save_frame = frame;
         save.on_click(move |_| {
             save_cfg.borrow_mut().settings.stack_counter = sc.get_value();
@@ -1330,6 +1354,7 @@ fn main() {
             save_cfg.borrow_mut().settings.detailed_status = dsc.get_value();
             save_cfg.borrow_mut().settings.visual_check = vsc.get_value();
             save_cfg.borrow_mut().settings.check_for_updates = usc.get_value();
+            save_cfg.borrow_mut().settings.update_channel = selected_channel(&chc);
             let _ = save_cfg.borrow().save();
             save_frame.close(true);
         });

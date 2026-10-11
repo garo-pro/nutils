@@ -129,3 +129,67 @@ jobs:
           name: nutils
           path: dist/
           if-no-files-found: error
+
+  # The dev update channel: every push to master replaces the rolling `latest`
+  # pre-release with this build, zipped and signed like a release (see
+  # release.yml). Its notes list the recent commits, newest first, as
+  # `- <hash> <subject>`: the updater finds the installed build's commit there
+  # and shows what came after it. A pre-release, so stable checks (GitHub's
+  # "latest release") never see it.
+  dev-release:
+    needs: build
+    # Not for pull requests, and not when release.yml calls this workflow for a
+    # tag (the caller's event and ref apply then).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # A newer push may cancel the build, never a half-done publish.
+    concurrency:
+      group: dev-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 50
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: nutils
+          path: dist
+
+      - name: Zip
+        run: cd dist && zip -9 -r ../nutils.zip .
+
+      - name: Install minisign
+        run: |
+          gh release download 0.12 -R jedisct1/minisign -p 'minisign-0.12-linux.tar.gz'
+          tar -xzf minisign-0.12-linux.tar.gz
+          echo "$PWD/minisign-linux/x86_64" >> "$GITHUB_PATH"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Sign
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/nutils.key"
+          minisign -S -s "$RUNNER_TEMP/nutils.key" -m nutils.zip -t "NUtils dev ${GITHUB_SHA::7}"
+          rm "$RUNNER_TEMP/nutils.key"
+          public_key=$(grep -oP 'PUBLIC_KEY: &str = "\K[^"]+' settings/src/update.rs)
+          minisign -V -P "$public_key" -m nutils.zip
+
+      # Seven-digit hashes, matching what nutils.exe reports (build.rs).
+      - name: Release notes
+        run: |
+          git log -50 --format='%H %s' | awk '{ print "- " substr($1, 1, 7) " " substr($0, 42) }' > notes.md
+          cat notes.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --cleanup-tag --yes || true
+          gh release create latest nutils.zip nutils.zip.minisig --prerelease \
+            --target "$GITHUB_SHA" --title "NUtils development build" --notes-file notes.md
