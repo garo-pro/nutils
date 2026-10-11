@@ -13,6 +13,12 @@ on:
 jobs:
   build:
     uses: ./.github/workflows/build.yml
+    # A called workflow's jobs can't ask for more than the caller grants, and
+    # build.yml's dev-release job asks for contents: write (it's skipped here,
+    # but GitHub refuses to start the run all the same). The build job itself
+    # stays read-only.
+    permissions:
+      contents: write
 
   publish:
     needs: build

@@ -33,6 +33,9 @@ env:
 jobs:
   build:
     runs-on: windows-latest
+    # Explicit, since release.yml calls this workflow with contents: write.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
 
