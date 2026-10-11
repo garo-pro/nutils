@@ -144,10 +144,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    # A newer push may cancel the build, never a half-done publish.
-    concurrency:
-      group: dev-release
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
         with:
@@ -186,6 +182,10 @@ jobs:
           git log -50 --format='%H %s' | awk '{ print "- " substr($1, 1, 7) " " substr($0, 42) }' > notes.md
           cat notes.md
 
+      # The workflow's concurrency cancels this whole run when a newer push
+      # comes, this job included. Cancelled between the delete and the create,
+      # there's no `latest` release until the newer run publishes one: dev
+      # checks fail with "not found" meanwhile, and nothing half-done ships.
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
